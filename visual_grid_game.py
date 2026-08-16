@@ -7,9 +7,11 @@ class VisualGridHuntGame:
     """A flexible Pacman-style grid environment with support for configurable opponents and larger scales."""
 
     def __init__(self, width=10, height=10, num_food=10, num_opponents=2, custom_walls=None):
+        self.agent = ModelBasedAgent()   #change the agent from here
         self.width = width
         self.height = height
         self.agent_pos = [0, 0]  # Starting position (x, y)
+        self.direction = 'Up' #The agent starts facing Up.
 
         if custom_walls is not None:
             self.walls = set(custom_walls)
@@ -40,57 +42,178 @@ class VisualGridHuntGame:
         self.collision = False
 
     def get_percept(self) -> dict:
-        return {
-            'agent_pos': list(self.agent_pos),
-            'opponent_positions': [list(op) for op in self.opponents],
-            'smells_food': tuple(self.agent_pos) in self.food_positions,
-            'hit_wall': tuple(self.agent_pos) in self.walls,
-            'collision': self.collision,
-            'score': self.score,
-            'remaining_food': len(self.food_positions)
-        }
+        x, y = self.agent_pos
 
+        # Find the cell directly in front of the agent
+        if self.direction == 'Up':
+           ahead = (x, y + 1)
+        elif self.direction == 'Down':
+           ahead = (x, y - 1)
+        elif self.direction == 'Left':
+           ahead = (x - 1, y)
+        else:
+           ahead = (x + 1, y)
+
+        # Check whether the cell ahead is outside the grid
+        # or contains a wall
+        wall_ahead = (
+           ahead[0] < 0 or
+           ahead[0] >= self.width or
+           ahead[1] < 0 or
+           ahead[1] >= self.height or
+           ahead in self.walls
+        )
+
+        # Check whether food is in the current cell
+        food_here = tuple(self.agent_pos) in self.food_positions
+
+        return {
+          'wall_ahead': wall_ahead,
+          'food_here': food_here
+        }
+    #new part where stopped
     def execute_action(self, action: str):
         self.steps += 1
-        new_pos = list(self.agent_pos)
 
-        if action == 'Up':
-            new_pos[1] = min(self.height - 1, new_pos[1] + 1)
-        elif action == 'Down':
-            new_pos[1] = max(0, new_pos[1] - 1)
-        elif action == 'Left':
-            new_pos[0] = max(0, new_pos[0] - 1)
-        elif action == 'Right':
-            new_pos[0] = min(self.width - 1, new_pos[0] + 1)
+        # 1. Collect food
+        if action == 'Suck':
+            if tuple(self.agent_pos) in self.food_positions:
+              self.food_positions.remove(tuple(self.agent_pos))
+              self.score += 20
 
-        if tuple(new_pos) in self.walls:
-            self.score -= 5
-        else:
-            self.agent_pos = new_pos
+        # 2. Turn left
+        elif action == 'TurnLeft':
+            directions = ['Up', 'Left', 'Down', 'Right']
+            current_index = directions.index(self.direction)
+            self.direction = directions[(current_index + 1) % 4]
 
-        tuple_pos = tuple(self.agent_pos)
-        if tuple_pos in self.food_positions:
-            self.food_positions.remove(tuple_pos)
-            self.score += 20
+        # 3. Turn right
+        elif action == 'TurnRight':
+            directions = ['Up', 'Right', 'Down', 'Left']
+            current_index = directions.index(self.direction)
+            self.direction = directions[(current_index + 1) % 4]
 
+        # 4. Move forward
+        elif action == 'MoveForward':
+            new_pos = list(self.agent_pos)
+
+            if self.direction == 'Up':
+              new_pos[1] += 1
+            elif self.direction == 'Down':
+              new_pos[1] -= 1
+            elif self.direction == 'Left':
+              new_pos[0] -= 1
+            elif self.direction == 'Right':
+              new_pos[0] += 1
+
+            # Check whether the new position is outside the grid
+            # or contains a wall
+            if (
+              new_pos[0] < 0 or
+              new_pos[0] >= self.width or
+              new_pos[1] < 0 or
+              new_pos[1] >= self.height or
+              tuple(new_pos) in self.walls
+            ):
+              self.score -= 5
+            else:
+              self.agent_pos = new_pos
+
+        # Move opponents
         for op in self.opponents:
             move = random.choice(['Up', 'Down', 'Left', 'Right', 'Stay'])
+
             if move == 'Up' and op[1] < self.height - 1:
-                op[1] += 1
+              op[1] += 1
             elif move == 'Down' and op[1] > 0:
-                op[1] -= 1
+              op[1] -= 1
             elif move == 'Left' and op[0] > 0:
-                op[0] -= 1
+              op[0] -= 1
             elif move == 'Right' and op[0] < self.width - 1:
-                op[0] += 1
+              op[0] += 1
 
             if op == self.agent_pos:
-                self.score -= 50
-                self.collision = True
+             self.score -= 50
+             self.collision = True
 
     def is_done(self) -> bool:
         return len(self.food_positions) == 0 or self.steps >= 60 or self.collision
+#Simple Reflex agent --> no _init__ method needed since it doesn't maintain state between actions (no need to store direction or position). It simply reacts to the current percept.
+class SimpleReflexAgent:
 
+    def sense_and_act(self, percept):
+        if percept['food_here']:
+            return 'Suck'
+
+        elif percept['wall_ahead']:
+            return 'TurnLeft'
+
+        else:
+            return 'MoveForward'
+
+class ModelBasedAgent:
+    def __init__(self):
+        # Internal model of the world (state)
+        self.x = 0
+        self.y = 0
+        self.direction = 'Up'
+        self.visited = {(0, 0)}          # Remember where it has been
+        self.last_action = None
+        self.last_percept = None          # Needed to know if a move succeeded
+
+    def sense_and_act(self, percept):
+        # --- 1. Update Internal State (Transition & Sensor Model) ---
+        # Update position based on last action (if it succeeded)
+        if self.last_action == 'MoveForward':
+            # The move succeeded if there was NO wall ahead in the previous percept
+            if self.last_percept and not self.last_percept['wall_ahead']:
+                if self.direction == 'Up':
+                    self.y += 1
+                elif self.direction == 'Down':
+                    self.y -= 1
+                elif self.direction == 'Left':
+                    self.x -= 1
+                elif self.direction == 'Right':
+                    self.x += 1
+        elif self.last_action == 'TurnLeft':
+            dirs = ['Up', 'Left', 'Down', 'Right']
+            self.direction = dirs[(dirs.index(self.direction) + 1) % 4]
+        elif self.last_action == 'TurnRight':
+            dirs = ['Up', 'Right', 'Down', 'Left']
+            self.direction = dirs[(dirs.index(self.direction) + 1) % 4]
+
+        # Mark the current cell as visited
+        self.visited.add((self.x, self.y))
+
+        # --- 2. Check if the cell to the left is visited ---
+        left_cell = None
+        if self.direction == 'Up':
+            left_cell = (self.x - 1, self.y)
+        elif self.direction == 'Down':
+            left_cell = (self.x + 1, self.y)
+        elif self.direction == 'Left':
+            left_cell = (self.x, self.y + 1)
+        elif self.direction == 'Right':
+            left_cell = (self.x, self.y - 1)
+
+        left_is_visited = left_cell in self.visited
+
+        # --- 3. Decision Logic (Condition-Action Rules with Memory) ---
+        if percept['food_here']:
+            action = 'Suck'
+        elif percept['wall_ahead'] and left_is_visited:
+            # If wall ahead AND left is visited → turn right (break the loop!)
+            action = 'TurnRight'
+        elif percept['wall_ahead']:
+            action = 'TurnLeft'
+        else:
+            action = 'MoveForward'
+
+        # --- 4. Store for next iteration ---
+        self.last_action = action
+        self.last_percept = percept
+
+        return action
 
 class GridGameGUI:
     """Tkinter wrapper that dynamically scales cell sizes to keep larger grids on screen."""
@@ -165,7 +288,9 @@ class GridGameGUI:
 
         def step():
             if not self.env.is_done():
-                action = random.choice(['Up', 'Down', 'Left', 'Right'])
+                #replaced this line: action = random.choice(['Up', 'Down', 'Left', 'Right'])
+                percept = self.env.get_percept()
+                action = self.env.agent.sense_and_act(percept)
                 self.env.execute_action(action)
 
                 self.draw_grid()
